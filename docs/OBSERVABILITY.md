@@ -9,6 +9,10 @@
 
 Официальный репозиторий библиотеки: https://github.com/algebrain/lcmm-observe
 
+Практические рекомендации по применению:
+1. Для уровня приложения: [OBSERVE_APP.md](./OBSERVE_APP.md).
+2. Для уровня модулей: [OBSERVE_MODULE.md](./OBSERVE_MODULE.md).
+
 ## 1. API Reference (канонический контракт)
 
 ## 1.1 `make-registry`
@@ -221,7 +225,7 @@
 
 ## 1.8 `with-timing`
 
-Назначение: измерить длительность выполнения блока и записать в histogram (мс).
+Назначение: измерить длительность выполнения блока и записать в histogram (мс). Это macro.
 
 Сигнатура:
 ```clojure
@@ -308,7 +312,7 @@ Namespace: `lcmm.observe.http`
 Аргументы:
 1. `handler` (Ring handler, обязательный)
 2. `:registry` (обязательный)
-3. `:module` (обязательный, keyword)
+3. `:module` (обязательный, обычно `keyword`; также допускается строка)
 4. `:route-fn` (optional, `(fn [req] route-template)`)
 
 Поведение:
@@ -350,7 +354,7 @@ Namespace: `lcmm.observe.bus`
 Аргументы:
 1. `handler` (обязательный)
 2. `:registry` (обязательный)
-3. `:module` (обязательный)
+3. `:module` (обязательный, обычно `keyword`; также допускается строка)
 4. `:handler-name` (обязательный)
 5. `:event-type-fn` (optional, `(fn [envelope] event-type)`)
 
@@ -389,7 +393,7 @@ Namespace: `lcmm.observe.bus`
 
 Аргументы:
 1. `registry` (обязательный)
-2. `module` (обязательный)
+2. `module` (обязательный, обычно `keyword`; также допускается строка)
 3. `depth` (число)
 
 Возвращаемое значение:

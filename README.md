@@ -11,3 +11,10 @@ For API details, integration patterns, defaults, and troubleshooting, see:
 Development:
 - `bb test.bb`
 - `bb bench.bb --mode=quick --scenario=all`
+
+
+## Documentation
+
+1. [OBSERVABILITY.md](./docs/OBSERVABILITY.md)
+2. [OBSERVE_APP.md](./docs/OBSERVE_APP.md)
+3. [OBSERVE_MODULE.md](./docs/OBSERVE_MODULE.md)
