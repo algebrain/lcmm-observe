@@ -50,7 +50,7 @@
 
 (defn handle-important-op!
   [registry payload]
-  (let [op-total (obs/counter! registry :my-module/important-op-total
+  (let [op-total (obs/register-counter! registry :my-module/important-op-total
                                {:labels [:module :result]})]
     (try
       ;; business logic

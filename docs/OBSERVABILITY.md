@@ -15,9 +15,20 @@
 
 ## 1. API Reference (канонический контракт)
 
+Ниже API описан в формате "что делает -> зачем -> когда применять".
+В библиотеке используется строгий разделенный API: функции регистрации и функции получения handle имеют разные имена.
+
 ## 1.1 `make-registry`
 
-Назначение: создать реестр метрик и политики поведения библиотеки.
+Назначение: создать общий реестр метрик и политики поведения библиотеки.
+
+Зачем нужна:
+1. Это единый in-memory источник метрик, который должны использовать и запись, и `/metrics`.
+2. Здесь настраиваются safety-политики (strict labels, cardinality limit, invalid numbers, cache TTL).
+
+Когда применять:
+1. Один раз при старте приложения.
+2. До инициализации модулей/wrappers и до публикации `/metrics`.
 
 Сигнатура:
 ```clojure
@@ -58,16 +69,24 @@
     :strict-labels? false
     :max-series-per-metric 5000
     :on-series-limit :drop-and-log
+    :on-invalid-number :drop-and-log
     :render-cache-ttl-ms 1000))
 ```
 
-## 1.2 `counter!`
+## 1.2 `register-counter!`
 
-Назначение: зарегистрировать (или вернуть) counter-метрику.
+Назначение: зарегистрировать новую counter-метрику и вернуть handle.
+
+Зачем нужна:
+1. Явно объявляет контракт метрики (`name/type/labels/help`) в одном месте.
+
+Когда применять:
+1. Обычно в `init!` модуля или при создании wrapper.
+2. До первого вызова `inc!`.
 
 Сигнатура:
 ```clojure
-(obs/counter! registry metric-id opts)
+(obs/register-counter! registry metric-id opts)
 ```
 
 Аргументы:
@@ -77,46 +96,128 @@
 Поддерживаемые keys: `:help`, `:labels`, `:name`.
 
 Возвращаемое значение:
-1. Handle метрики (используется в `inc!`).
+1. Handle counter-метрики (используется в `inc!`).
 
 Ошибки:
 1. `metric-id` не keyword.
 2. labels не keywords.
-3. конфликт регистрации с другим типом/контрактом.
+3. метрика с таким `metric-id` уже зарегистрирована (любой тип/контракт).
 
 Пример:
 ```clojure
 (def req-total
-  (obs/counter! registry :http/server-requests-total
-                {:help "Total HTTP requests"
-                 :labels [:module :method :route :status_class]}))
+  (obs/register-counter! registry :http/server-requests-total
+                         {:help "Total HTTP requests"
+                          :labels [:module :method :route :status_class]}))
 ```
 
-## 1.3 `gauge!`
+## 1.3 `get-counter`
 
-Назначение: зарегистрировать (или вернуть) gauge-метрику.
+Назначение: вернуть handle уже зарегистрированной counter-метрики.
+
+Зачем нужна:
+1. Позволяет безопасно использовать уже объявленную метрику в другом месте кода.
+
+Когда применять:
+1. Когда метрика зарегистрирована ранее, а писать в нее нужно из другого namespace/компонента.
 
 Сигнатура:
 ```clojure
-(obs/gauge! registry metric-id opts)
+(obs/get-counter registry metric-id)
 ```
 
-Аргументы/ошибки: аналогично `counter!`.
-Возвращаемый handle используется в `set!`.
+Аргументы:
+1. `registry`
+2. `metric-id`
+
+Возвращаемое значение:
+1. Handle counter-метрики.
+
+Ошибки:
+1. метрика не зарегистрирована;
+2. метрика существует, но имеет другой тип.
+
+Пример:
+```clojure
+(def req-total (obs/get-counter registry :http/server-requests-total))
+(obs/inc! req-total 1.0
+          {:module "gateway" :method "get" :route "/health" :status_class "2xx"})
+```
+
+## 1.4 `register-gauge!`
+
+Назначение: зарегистрировать новую gauge-метрику и вернуть handle.
+
+Зачем нужна:
+1. Явно объявляет gauge для состояния "на текущий момент".
+
+Когда применять:
+1. В init-коде адаптера/модуля, который обновляет текущее значение через `set!`.
+
+Сигнатура:
+```clojure
+(obs/register-gauge! registry metric-id opts)
+```
+
+Аргументы/ошибки:
+1. Аналогично `register-counter!` (с учетом типа gauge).
+
+Возвращаемое значение:
+1. Handle gauge-метрики (используется в `set!`).
 
 Пример:
 ```clojure
 (def queue-depth
-  (obs/gauge! registry :event-bus/queue-depth {:labels [:module]}))
+  (obs/register-gauge! registry :event-bus/queue-depth
+                       {:help "Event bus queue depth"
+                        :labels [:module]}))
 ```
 
-## 1.4 `histogram!`
+## 1.5 `get-gauge`
 
-Назначение: зарегистрировать (или вернуть) histogram-метрику.
+Назначение: вернуть handle уже зарегистрированной gauge-метрики.
+
+Зачем нужна:
+1. Позволяет обновлять существующую gauge из другого участка кода.
+
+Когда применять:
+1. Когда gauge уже зарегистрирована и нужен только доступ к handle.
 
 Сигнатура:
 ```clojure
-(obs/histogram! registry metric-id opts)
+(obs/get-gauge registry metric-id)
+```
+
+Аргументы:
+1. `registry`
+2. `metric-id`
+
+Возвращаемое значение:
+1. Handle gauge-метрики.
+
+Ошибки:
+1. метрика не зарегистрирована;
+2. метрика существует, но имеет другой тип.
+
+Пример:
+```clojure
+(def queue-depth (obs/get-gauge registry :event-bus/queue-depth))
+(obs/set! queue-depth 5.0 {:module "billing"})
+```
+
+## 1.6 `register-histogram!`
+
+Назначение: зарегистрировать новую histogram-метрику и вернуть handle.
+
+Зачем нужна:
+1. Явно фиксирует buckets/labels для latency или других распределений.
+
+Когда применять:
+1. В init-коде до первых вызовов `observe!`/`with-timing`.
+
+Сигнатура:
+```clojure
+(obs/register-histogram! registry metric-id opts)
 ```
 
 Аргументы:
@@ -130,19 +231,63 @@
 3. строго возрастающая последовательность.
 
 Возвращаемое значение:
-1. Handle метрики (используется в `observe!`, `with-timing`).
+1. Handle histogram-метрики (используется в `observe!`, `with-timing`).
+
+Ошибки:
+1. Невалидный `metric-id`/labels/buckets;
+2. метрика с таким `metric-id` уже зарегистрирована.
 
 Пример:
 ```clojure
 (def req-latency
-  (obs/histogram! registry :http/server-request-latency-ms
-                  {:labels [:module :method :route]
-                   :buckets [5.0 10.0 25.0 50.0 100.0 250.0 500.0 1000.0]}))
+  (obs/register-histogram! registry :http/server-request-latency-ms
+                           {:help "HTTP request latency in ms"
+                            :labels [:module :method :route]
+                            :buckets [5.0 10.0 25.0 50.0 100.0 250.0 500.0 1000.0]}))
 ```
 
-## 1.5 `inc!`
+## 1.7 `get-histogram`
 
-Назначение: увеличить counter.
+Назначение: вернуть handle уже зарегистрированной histogram-метрики.
+
+Зачем нужна:
+1. Позволяет писать наблюдения в уже объявленную histogram из другого кода.
+
+Когда применять:
+1. Когда histogram зарегистрирована ранее, а метка/значение появляются в другом компоненте.
+
+Сигнатура:
+```clojure
+(obs/get-histogram registry metric-id)
+```
+
+Аргументы:
+1. `registry`
+2. `metric-id`
+
+Возвращаемое значение:
+1. Handle histogram-метрики.
+
+Ошибки:
+1. метрика не зарегистрирована;
+2. метрика существует, но имеет другой тип.
+
+Пример:
+```clojure
+(def req-latency (obs/get-histogram registry :http/server-request-latency-ms))
+(obs/observe! req-latency 12.4
+              {:module "gateway" :method "get" :route "/health"})
+```
+
+## 1.8 `inc!`
+
+Назначение: увеличить значение counter по конкретной label-series.
+
+Зачем нужна:
+1. Для учета количества событий/запросов/ошибок.
+
+Когда применять:
+1. В точках, где произошло счетное событие.
 
 Сигнатуры:
 ```clojure
@@ -174,9 +319,15 @@
            :status_class "2xx"})
 ```
 
-## 1.6 `set!`
+## 1.9 `set!`
 
-Назначение: установить значение gauge.
+Назначение: установить значение gauge по конкретной label-series.
+
+Зачем нужна:
+1. Для метрик состояния "на сейчас" (queue depth, in-flight и т.д.).
+
+Когда применять:
+1. Когда нужно перезаписать текущее значение, а не накапливать счетчик.
 
 Сигнатура:
 ```clojure
@@ -191,16 +342,23 @@
 Возвращаемое значение:
 1. Тот же handle.
 
-Ошибки: аналогично `inc!` (с учетом типа операции `set`).
+Ошибки:
+1. Аналогично `inc!` (с учетом типа операции `set`).
 
 Пример:
 ```clojure
 (obs/set! queue-depth 5.0 {:module "billing"})
 ```
 
-## 1.7 `observe!`
+## 1.10 `observe!`
 
-Назначение: добавить наблюдение в histogram.
+Назначение: добавить наблюдение в histogram по конкретной label-series.
+
+Зачем нужна:
+1. Для записи latency/размеров/других распределенных величин.
+
+Когда применять:
+1. Когда есть измеренное числовое значение, которое нужно положить в buckets.
 
 Сигнатура:
 ```clojure
@@ -215,7 +373,8 @@
 Возвращаемое значение:
 1. Тот же handle.
 
-Ошибки: аналогично `inc!` (с учетом типа операции `observe`).
+Ошибки:
+1. Аналогично `inc!` (с учетом типа операции `observe`).
 
 Пример:
 ```clojure
@@ -223,9 +382,15 @@
               {:module "gateway" :method "get" :route "/health"})
 ```
 
-## 1.8 `with-timing`
+## 1.11 `with-timing`
 
 Назначение: измерить длительность выполнения блока и записать в histogram (мс). Это macro.
+
+Зачем нужна:
+1. Быстро добавить latency-метрику без ручного замера времени.
+
+Когда применять:
+1. Вокруг операции, где latency важна и запись должна происходить даже при exception.
 
 Сигнатура:
 ```clojure
@@ -250,9 +415,16 @@
   :ok)
 ```
 
-## 1.9 `render-prometheus`
+## 1.12 `render-prometheus`
 
 Назначение: отрендерить реестр в Prometheus text exposition format.
+
+Зачем нужна:
+1. Низкоуровневый экспорт содержимого registry.
+
+Когда применять:
+1. Внутри `/metrics` handler.
+2. В тестах/локальной диагностике.
 
 Сигнатура:
 ```clojure
@@ -276,9 +448,15 @@
 (def payload (obs/render-prometheus registry))
 ```
 
-## 1.10 `metrics-handler`
+## 1.13 `metrics-handler`
 
 Назначение: создать Ring-handler для экспорта `/metrics`.
+
+Зачем нужна:
+1. Готовый HTTP entrypoint для Prometheus scrape.
+
+Когда применять:
+1. На уровне приложения при публикации endpoint-а `/metrics`.
 
 Сигнатура:
 ```clojure
@@ -298,11 +476,17 @@
 (metrics {:uri "/metrics"})
 ```
 
-## 1.11 `wrap-observe-http`
+## 1.14 `wrap-observe-http`
 
 Namespace: `lcmm.observe.http`
 
 Назначение: обернуть Ring-handler и автоматически писать HTTP-метрики.
+
+Зачем нужна:
+1. Убрать дублирование ручного инкремента requests/errors и latency.
+
+Когда применять:
+1. На верхнем уровне входящего HTTP handler приложения.
 
 Сигнатура:
 ```clojure
@@ -316,14 +500,13 @@ Namespace: `lcmm.observe.http`
 4. `:route-fn` (optional, `(fn [req] route-template)`)
 
 Поведение:
-1. method: `keyword -> name`, `string -> string`, иначе `"unknown"`;
-2. route: `route-fn`, иначе `reitit template`, иначе `"unknown"`;
-3. exception в handler учитывается как `5xx`, исключение пробрасывается дальше.
-
-Метрики:
-1. `http_server_requests_total`
-2. `http_server_request_errors_total`
-3. `http_server_request_latency_ms`
+1. wrapper использует/создает в registry метрики:
+   1. `http_server_requests_total`
+   2. `http_server_request_errors_total`
+   3. `http_server_request_latency_ms`
+2. method: `keyword -> name`, `string -> string`, иначе `"unknown"`;
+3. route: `route-fn`, иначе `reitit template`, иначе `"unknown"`;
+4. exception в handler учитывается как `5xx`, исключение пробрасывается дальше.
 
 Ошибки:
 1. отсутствует `:registry` или `:module`.
@@ -338,11 +521,17 @@ Namespace: `lcmm.observe.http`
     :route-fn (fn [req] (get-in req [:reitit.core/match :template]))}))
 ```
 
-## 1.12 `wrap-bus-handler`
+## 1.15 `wrap-bus-handler`
 
 Namespace: `lcmm.observe.bus`
 
 Назначение: обернуть event-bus handler и писать latency/failure метрики.
+
+Зачем нужна:
+1. Единообразно собирать надежность и latency для bus handlers.
+
+Когда применять:
+1. Для критичных обработчиков шины.
 
 Сигнатура:
 ```clojure
@@ -359,13 +548,12 @@ Namespace: `lcmm.observe.bus`
 5. `:event-type-fn` (optional, `(fn [envelope] event-type)`)
 
 Поведение:
-1. latency пишется в `finally`;
-2. при exception увеличивается failures counter, исключение пробрасывается;
-3. event-type keyword нормализуется в строку без ведущего `:`.
-
-Метрики:
-1. `event_bus_handler_failures_total`
-2. `event_bus_handler_latency_ms`
+1. wrapper использует/создает в registry метрики:
+   1. `event_bus_handler_failures_total`
+   2. `event_bus_handler_latency_ms`
+2. latency пишется в `finally`;
+3. при exception увеличивается failures counter, исключение пробрасывается;
+4. event-type keyword нормализуется в строку без ведущего `:`.
 
 Ошибки:
 1. отсутствует `:registry`, `:module`, `:handler-name`.
@@ -380,11 +568,17 @@ Namespace: `lcmm.observe.bus`
     :handler-name "emit-invoice"}))
 ```
 
-## 1.13 `set-queue-depth!`
+## 1.16 `set-queue-depth!`
 
 Namespace: `lcmm.observe.bus`
 
 Назначение: обновить gauge глубины очереди bus.
+
+Зачем нужна:
+1. Дает короткий API для backlog-метрики в buffered bus режиме.
+
+Когда применять:
+1. В точке, где известна текущая глубина очереди.
 
 Сигнатура:
 ```clojure

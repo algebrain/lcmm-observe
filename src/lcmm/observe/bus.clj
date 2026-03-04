@@ -10,6 +10,33 @@
       (subs (str raw) 1)
       (str raw))))
 
+(defn- ensure-counter
+  [registry metric-id opts]
+  (try
+    (obs/get-counter registry metric-id)
+    (catch clojure.lang.ExceptionInfo ex
+      (if (= :counter (:actual-type (ex-data ex)))
+        (throw ex)
+        (obs/register-counter! registry metric-id opts)))))
+
+(defn- ensure-histogram
+  [registry metric-id opts]
+  (try
+    (obs/get-histogram registry metric-id)
+    (catch clojure.lang.ExceptionInfo ex
+      (if (= :histogram (:actual-type (ex-data ex)))
+        (throw ex)
+        (obs/register-histogram! registry metric-id opts)))))
+
+(defn- ensure-gauge
+  [registry metric-id opts]
+  (try
+    (obs/get-gauge registry metric-id)
+    (catch clojure.lang.ExceptionInfo ex
+      (if (= :gauge (:actual-type (ex-data ex)))
+        (throw ex)
+        (obs/register-gauge! registry metric-id opts)))))
+
 (defn wrap-bus-handler
   "Wraps event-bus handler and records latency/failure metrics.
 
@@ -27,13 +54,13 @@
     (throw (ex-info "Missing :module in wrap-bus-handler options." {})))
   (when-not handler-name
     (throw (ex-info "Missing :handler-name in wrap-bus-handler options." {})))
-  (let [failures (obs/counter! registry :event-bus/handler-failures-total
-                               {:help "Event bus handler failures"
-                                :labels [:module :event_type :handler]})
-        latency (obs/histogram! registry :event-bus/handler-latency-ms
-                                {:help "Event bus handler latency in ms"
-                                 :labels [:module :event_type :handler]
-                                 :buckets [1.0 2.0 5.0 10.0 25.0 50.0 100.0 250.0 500.0 1000.0]})]
+  (let [failures (ensure-counter registry :event-bus/handler-failures-total
+                                 {:help "Event bus handler failures"
+                                  :labels [:module :event_type :handler]})
+        latency (ensure-histogram registry :event-bus/handler-latency-ms
+                                  {:help "Event bus handler latency in ms"
+                                   :labels [:module :event_type :handler]
+                                   :buckets [1.0 2.0 5.0 10.0 25.0 50.0 100.0 250.0 500.0 1000.0]})]
     (fn [bus envelope]
       (let [labels {:module (name module)
                     :event_type (event-type-str envelope event-type-fn)
@@ -56,7 +83,7 @@
     (throw (ex-info "Missing registry in set-queue-depth!." {})))
   (when-not module
     (throw (ex-info "Missing :module in set-queue-depth! options." {})))
-  (let [gauge (obs/gauge! registry :event-bus/queue-depth
-                          {:help "Event bus queue depth"
-                           :labels [:module]})]
+  (let [gauge (ensure-gauge registry :event-bus/queue-depth
+                            {:help "Event bus queue depth"
+                             :labels [:module]})]
     (obs/set! gauge (double depth) {:module (name module)})))

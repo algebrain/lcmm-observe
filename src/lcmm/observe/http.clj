@@ -18,6 +18,24 @@
       (get-in req [:reitit.core/match :template])
       "unknown"))
 
+(defn- ensure-counter
+  [registry metric-id opts]
+  (try
+    (obs/get-counter registry metric-id)
+    (catch clojure.lang.ExceptionInfo ex
+      (if (= :counter (:actual-type (ex-data ex)))
+        (throw ex)
+        (obs/register-counter! registry metric-id opts)))))
+
+(defn- ensure-histogram
+  [registry metric-id opts]
+  (try
+    (obs/get-histogram registry metric-id)
+    (catch clojure.lang.ExceptionInfo ex
+      (if (= :histogram (:actual-type (ex-data ex)))
+        (throw ex)
+        (obs/register-histogram! registry metric-id opts)))))
+
 (defn wrap-observe-http
   "Wraps Ring handler and records HTTP metrics.
 
@@ -32,16 +50,16 @@
     (throw (ex-info "Missing :registry in wrap-observe-http options." {})))
   (when-not module
     (throw (ex-info "Missing :module in wrap-observe-http options." {})))
-  (let [req-total (obs/counter! registry :http/server-requests-total
-                                {:help "Total HTTP requests"
-                                 :labels [:module :method :route :status_class]})
-        req-errors (obs/counter! registry :http/server-request-errors-total
-                                 {:help "Total HTTP error responses"
-                                  :labels [:module :method :route :status_class]})
-        req-latency (obs/histogram! registry :http/server-request-latency-ms
-                                    {:help "HTTP request latency in ms"
-                                     :labels [:module :method :route]
-                                     :buckets [5.0 10.0 25.0 50.0 100.0 250.0 500.0 1000.0 2500.0]})]
+  (let [req-total (ensure-counter registry :http/server-requests-total
+                                  {:help "Total HTTP requests"
+                                   :labels [:module :method :route :status_class]})
+        req-errors (ensure-counter registry :http/server-request-errors-total
+                                   {:help "Total HTTP error responses"
+                                    :labels [:module :method :route :status_class]})
+        req-latency (ensure-histogram registry :http/server-request-latency-ms
+                                      {:help "HTTP request latency in ms"
+                                       :labels [:module :method :route]
+                                       :buckets [5.0 10.0 25.0 50.0 100.0 250.0 500.0 1000.0 2500.0]})]
     (fn [req]
       (let [route (str (route-template req route-fn))
             method (normalize-method (:request-method req))

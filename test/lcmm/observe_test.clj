@@ -10,12 +10,12 @@
 
 (deftest counter-and-gauge-render-test
   (let [registry (obs/make-registry)
-        reqs (obs/counter! registry :http/server-requests-total
-                           {:help "Total requests"
-                            :labels [:module :method]})
-        qdepth (obs/gauge! registry :event-bus/queue-depth
-                           {:help "Queue depth"
-                            :labels [:module]})]
+        reqs (obs/register-counter! registry :http/server-requests-total
+                                    {:help "Total requests"
+                                     :labels [:module :method]})
+        qdepth (obs/register-gauge! registry :event-bus/queue-depth
+                                    {:help "Queue depth"
+                                     :labels [:module]})]
     (obs/inc! reqs 2 {:module "users" :method "get"})
     (obs/inc! reqs 3 {:module "users" :method "get"})
     (obs/set! qdepth 7 {:module "bus"})
@@ -28,10 +28,10 @@
 
 (deftest histogram-render-test
   (let [registry (obs/make-registry)
-        latency (obs/histogram! registry :http/server-request-latency-ms
-                                {:help "Latency in milliseconds"
-                                 :labels [:route]
-                                 :buckets [10.0 50.0 100.0]})
+        latency (obs/register-histogram! registry :http/server-request-latency-ms
+                                         {:help "Latency in milliseconds"
+                                          :labels [:route]
+                                          :buckets [10.0 50.0 100.0]})
         route-quoted (pr-str "/ping")]
     (obs/observe! latency 5 {:route "/ping"})
     (obs/observe! latency 10 {:route "/ping"})
@@ -47,7 +47,7 @@
   (let [logged (atom [])
         logger (fn [level data] (swap! logged conj [level data]))
         registry (obs/make-registry :logger logger)
-        reqs (obs/counter! registry :http/requests-total {:labels [:module]})]
+        reqs (obs/register-counter! registry :http/requests-total {:labels [:module]})]
     (obs/inc! reqs 1 {:module "users" :extra "ignored"})
     (let [text (obs/render-prometheus registry)
           [level data] (first @logged)]
@@ -58,21 +58,36 @@
 
 (deftest strict-labels-throws-test
   (let [registry (obs/make-registry :strict-labels? true)
-        reqs (obs/counter! registry :http/requests-total {:labels [:module]})]
+        reqs (obs/register-counter! registry :http/requests-total {:labels [:module]})]
     (is (thrown? clojure.lang.ExceptionInfo
                  (obs/inc! reqs 1 {:module "users" :extra "x"})))))
 
 (deftest duplicate-metric-conflict-test
   (let [registry (obs/make-registry)]
-    (obs/counter! registry :demo/value {:labels [:module]})
+    (obs/register-counter! registry :demo/value {:labels [:module]})
     (is (thrown? clojure.lang.ExceptionInfo
-                 (obs/histogram! registry :demo/value {:labels [:module]})))))
+                 (obs/register-histogram! registry :demo/value {:labels [:module]})))))
+
+(deftest duplicate-register-same-definition-throws-test
+  (let [registry (obs/make-registry)]
+    (obs/register-counter! registry :demo/same {:labels [:module]})
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (obs/register-counter! registry :demo/same {:labels [:module]})))))
+
+(deftest get-metric-missing-or-wrong-type-test
+  (let [registry (obs/make-registry)]
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (obs/get-counter registry :demo/missing)))
+    (obs/register-gauge! registry :demo/current {:labels [:module]})
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (obs/get-counter registry :demo/current)))
+    (is (map? (obs/get-gauge registry :demo/current)))))
 
 (deftest with-timing-test
   (let [registry (obs/make-registry)
-        h (obs/histogram! registry :demo/work-latency-ms
-                          {:labels [:module]
-                           :buckets [1.0 10.0 100.0]})]
+        h (obs/register-histogram! registry :demo/work-latency-ms
+                                   {:labels [:module]
+                                    :buckets [1.0 10.0 100.0]})]
     (obs/with-timing h {:module "demo"}
       (Thread/sleep 2)
       :ok)
@@ -81,7 +96,7 @@
 
 (deftest metrics-handler-test
   (let [registry (obs/make-registry)
-        reqs (obs/counter! registry :demo/requests-total {})
+        reqs (obs/register-counter! registry :demo/requests-total {})
         handler (obs/metrics-handler registry)]
     (obs/inc! reqs)
     (let [resp (handler {:uri "/metrics"})]
@@ -92,7 +107,7 @@
 
 (deftest concurrent-counter-updates-test
   (let [registry (obs/make-registry)
-        reqs (obs/counter! registry :demo/concurrent-total {})
+        reqs (obs/register-counter! registry :demo/concurrent-total {})
         workers (doall
                  (for [_ (range 20)]
                    (future
@@ -105,7 +120,7 @@
 (deftest series-limit-drop-and-log-test
   (let [registry (obs/make-registry :max-series-per-metric 1
                                     :on-series-limit :drop-and-log)
-        reqs (obs/counter! registry :demo/limited-total {:labels [:route]})]
+        reqs (obs/register-counter! registry :demo/limited-total {:labels [:route]})]
     (obs/inc! reqs 1.0 {:route "/a"})
     (obs/inc! reqs 1.0 {:route "/b"})
     (let [text (obs/render-prometheus registry)]
@@ -117,16 +132,16 @@
 (deftest series-limit-throw-test
   (let [registry (obs/make-registry :max-series-per-metric 1
                                     :on-series-limit :throw)
-        reqs (obs/counter! registry :demo/limited-total {:labels [:route]})]
+        reqs (obs/register-counter! registry :demo/limited-total {:labels [:route]})]
     (obs/inc! reqs 1.0 {:route "/a"})
     (is (thrown? clojure.lang.ExceptionInfo
                  (obs/inc! reqs 1.0 {:route "/b"})))))
 
 (deftest finite-number-validation-test
   (let [registry (obs/make-registry)
-        c (obs/counter! registry :demo/c {:labels [:m]})
-        g (obs/gauge! registry :demo/g {:labels [:m]})
-        h (obs/histogram! registry :demo/h {:labels [:m] :buckets [1.0 2.0]})]
+        c (obs/register-counter! registry :demo/c {:labels [:m]})
+        g (obs/register-gauge! registry :demo/g {:labels [:m]})
+        h (obs/register-histogram! registry :demo/h {:labels [:m] :buckets [1.0 2.0]})]
     (is (thrown? clojure.lang.ExceptionInfo (obs/inc! c Double/NaN {:m "x"})))
     (is (thrown? clojure.lang.ExceptionInfo (obs/set! g Double/POSITIVE_INFINITY {:m "x"})))
     (is (thrown? clojure.lang.ExceptionInfo (obs/observe! h Double/NEGATIVE_INFINITY {:m "x"})))))
@@ -136,7 +151,7 @@
         logger (fn [level data] (swap! logged conj [level data]))
         registry (obs/make-registry :logger logger
                                     :on-invalid-number :drop-and-log)
-        c (obs/counter! registry :demo/c {:labels [:m]})]
+        c (obs/register-counter! registry :demo/c {:labels [:m]})]
     (obs/inc! c Double/NaN {:m "x"})
     (let [text (obs/render-prometheus registry)]
       (is (nil? (line-for text "demo_c{")))
@@ -145,7 +160,7 @@
 
 (deftest per-metric-atom-mode-test
   (let [registry (obs/make-registry :storage-mode :per-metric-atom)
-        c (obs/counter! registry :demo/per-metric-total {:labels [:k]})
+        c (obs/register-counter! registry :demo/per-metric-total {:labels [:k]})
         workers (doall
                  (for [_ (range 10)]
                    (future
@@ -157,7 +172,7 @@
 
 (deftest render-cache-ttl-test
   (let [registry (obs/make-registry :render-cache-ttl-ms 1000)
-        c (obs/counter! registry :demo/cache-total {})]
+        c (obs/register-counter! registry :demo/cache-total {})]
     (obs/inc! c)
     (let [a (obs/render-prometheus registry)
           b (obs/render-prometheus registry)]

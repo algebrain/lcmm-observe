@@ -260,8 +260,8 @@
       (raise! "Unsupported :on-invalid-number policy."
               {:on-invalid-number (:on-invalid-number registry)}))))
 
-(defn- register-metric!
-  [registry metric-id metric-type opts]
+(defn- build-metric-def
+  [metric-id metric-type opts]
   (let [name (or (:name opts) (metric-name metric-id))
         labels (vec (or (:labels opts) []))
         help (or (:help opts) (str "Metric " name))
@@ -278,45 +278,75 @@
       (raise! "Metric labels must be keywords." {:labels labels :metric-id metric-id}))
     (when (= metric-type :histogram)
       (validate-buckets! buckets))
-    (let [new? (atom false)]
-      (swap! (:state registry)
-             (fn [{:keys [metrics] :as state}]
-               (if-let [existing (get metrics metric-id)]
-                 (let [existing-cfg (select-keys existing [:name :type :labels :buckets])
-                       new-cfg (select-keys metric-def [:name :type :labels :buckets])]
-                   (if (= existing-cfg new-cfg)
-                     state
-                     (raise! "Metric already registered with incompatible definition."
-                             {:metric-id metric-id
-                              :existing existing-cfg
-                              :new new-cfg})))
-                 (do
-                   (reset! new? true)
-                   (assoc state :metrics (assoc metrics metric-id metric-def))))))
-      (when (and @new? (= :per-metric-atom (:storage-mode registry)))
-        (swap! (:series-atoms registry)
-               (fn [m]
-                 (if (contains? m metric-id)
-                   m
-                   (assoc m metric-id (atom {}))))))
-      (when @new?
-        (invalidate-render-cache! registry)))
+    metric-def))
+
+(defn- ensure-metric-storage!
+  [registry metric-id]
+  (when (= :per-metric-atom (:storage-mode registry))
+    (swap! (:series-atoms registry)
+           (fn [m]
+             (if (contains? m metric-id)
+               m
+               (assoc m metric-id (atom {})))))))
+
+(defn- register-new-metric!
+  [registry metric-id metric-type opts]
+  (let [metric-def (build-metric-def metric-id metric-type opts)]
+    (swap! (:state registry)
+           (fn [{:keys [metrics] :as state}]
+             (if-let [existing (get metrics metric-id)]
+               (raise! "Metric already registered."
+                       {:metric-id metric-id
+                        :existing (select-keys existing [:name :type :labels :buckets])
+                        :new (select-keys metric-def [:name :type :labels :buckets])})
+               (assoc state :metrics (assoc metrics metric-id metric-def)))))
+    (ensure-metric-storage! registry metric-id)
+    (invalidate-render-cache! registry)
     (metric-handle registry metric-id)))
 
-(defn counter!
-  "Registers (or returns) counter metric handle."
-  [registry metric-id opts]
-  (register-metric! registry metric-id :counter opts))
+(defn- get-registered-metric!
+  [registry metric-id metric-type]
+  (let [metric-def (get-in @(:state registry) [:metrics metric-id])]
+    (when-not metric-def
+      (raise! "Metric is not registered."
+              {:metric-id metric-id
+               :expected-type metric-type}))
+    (when-not (= metric-type (:type metric-def))
+      (raise! "Metric type mismatch."
+              {:metric-id metric-id
+               :expected-type metric-type
+               :actual-type (:type metric-def)}))
+    (metric-handle registry metric-id)))
 
-(defn gauge!
-  "Registers (or returns) gauge metric handle."
+(defn register-counter!
+  "Registers a new counter metric handle. Throws if metric-id is already registered."
   [registry metric-id opts]
-  (register-metric! registry metric-id :gauge opts))
+  (register-new-metric! registry metric-id :counter opts))
 
-(defn histogram!
-  "Registers (or returns) histogram metric handle."
+(defn register-gauge!
+  "Registers a new gauge metric handle. Throws if metric-id is already registered."
   [registry metric-id opts]
-  (register-metric! registry metric-id :histogram opts))
+  (register-new-metric! registry metric-id :gauge opts))
+
+(defn register-histogram!
+  "Registers a new histogram metric handle. Throws if metric-id is already registered."
+  [registry metric-id opts]
+  (register-new-metric! registry metric-id :histogram opts))
+
+(defn get-counter
+  "Returns counter metric handle. Throws if metric is missing or has different type."
+  [registry metric-id]
+  (get-registered-metric! registry metric-id :counter))
+
+(defn get-gauge
+  "Returns gauge metric handle. Throws if metric is missing or has different type."
+  [registry metric-id]
+  (get-registered-metric! registry metric-id :gauge))
+
+(defn get-histogram
+  "Returns histogram metric handle. Throws if metric is missing or has different type."
+  [registry metric-id]
+  (get-registered-metric! registry metric-id :histogram))
 
 (defn- get-metric
   [metric]

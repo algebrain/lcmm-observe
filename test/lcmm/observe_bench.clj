@@ -132,10 +132,10 @@
                                       :on-invalid-number :throw
                                       :strict-labels? false)
           metric (case op
-                   :inc (obs/counter! registry :bench/inc {:labels [:k]})
-                   :set (obs/gauge! registry :bench/set {:labels [:k]})
-                   :observe (obs/histogram! registry :bench/obs {:labels [:k]
-                                                                 :buckets [1.0 5.0 10.0 50.0]}))
+                   :inc (obs/register-counter! registry :bench/inc {:labels [:k]})
+                   :set (obs/register-gauge! registry :bench/set {:labels [:k]})
+                   :observe (obs/register-histogram! registry :bench/obs {:labels [:k]
+                                                                          :buckets [1.0 5.0 10.0 50.0]}))
           op-fn (case op
                   :inc #(obs/inc! metric 1.0 {:k "v"})
                   :set #(obs/set! metric 42.0 {:k "v"})
@@ -161,7 +161,7 @@
                    invalid-policy [:throw :drop-and-log]]
                (let [registry (obs/make-registry :strict-labels? strict
                                                  :on-invalid-number invalid-policy)
-                     metric (obs/counter! registry :bench/policy {:labels [:k]})
+                     metric (obs/register-counter! registry :bench/policy {:labels [:k]})
                      summary (measure-case (merge cfg
                                                   {:threads 4
                                                    :op-fn #(obs/inc! metric 1.0 {:k "v"})}))
@@ -176,7 +176,7 @@
                       (let [registry (obs/make-registry :max-series-per-metric 1
                                                         :on-series-limit limit-policy
                                                         :strict-labels? false)
-                            metric (obs/counter! registry :bench/limit {:labels [:k]})
+                            metric (obs/register-counter! registry :bench/limit {:labels [:k]})
                             toggler (atom false)
                             summary (measure-case (merge cfg
                                                          {:threads 2
@@ -196,7 +196,7 @@
   [series-count ttl-ms]
   (let [registry (obs/make-registry :render-cache-ttl-ms ttl-ms
                                     :max-series-per-metric nil)
-        metric (obs/counter! registry :bench/render-total {:labels [:series]})]
+        metric (obs/register-counter! registry :bench/render-total {:labels [:series]})]
     (doseq [i (range series-count)]
       (obs/inc! metric 1.0 {:series (str i)}))
     registry))
@@ -232,7 +232,7 @@
       (let [before (heap-used-bytes)
             registry (obs/make-registry :storage-mode storage
                                         :max-series-per-metric nil)
-            metric (obs/counter! registry :bench/memory-total {:labels [:id]})]
+            metric (obs/register-counter! registry :bench/memory-total {:labels [:id]})]
         (doseq [i (range series-count)]
           (obs/inc! metric 1.0 {:id (str i)}))
         (let [after-fill (heap-used-bytes)]
@@ -260,9 +260,9 @@
                                     :max-series-per-metric 5000
                                     :on-invalid-number :drop-and-log
                                     :render-cache-ttl-ms 1000)
-        c (obs/counter! registry :bench/soak-total {:labels [:k]})
-        h (obs/histogram! registry :bench/soak-latency {:labels [:k]
-                                                        :buckets [1.0 2.0 5.0 10.0 25.0]})
+        c (obs/register-counter! registry :bench/soak-total {:labels [:k]})
+        h (obs/register-histogram! registry :bench/soak-latency {:labels [:k]
+                                                                 :buckets [1.0 2.0 5.0 10.0 25.0]})
         stop-at (+ (now-ns) (* (long (:soak-ms cfg)) 1000000))
         errors (atom 0)
         ops (atom 0)
